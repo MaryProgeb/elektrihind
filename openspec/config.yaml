@@ -1,0 +1,24 @@
+schema: spec-driven
+
+context: |
+  Daily Nord Pool EE cheapest-slot notifier for a dishwasher.
+  Stack: Python 3.12+, no Docker, GitHub Actions schedule (free tier) running python -m elektrihind.
+  Data: Elering Live GET https://dashboard.elering.ee/api/nps/price (15-min EE prices, EUR/MWh, no API key). Do not scrape elektrihind.ee.
+  Timezone: Europe/Tallinn. Messages in Estonian. Display senti/kWh with 24% VAT, no network fee or excise.
+  Notify: Telegram Bot API to a channel (TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID).
+  Entry: python -m elektrihind (once daily at 08:00; today only, no tomorrow).
+  docs/plan.md is planning input only; living specs live in openspec/ after archive.
+  Tests use fixtures; no live Telegram or Elering calls required to finish coding.
+
+rules:
+  specs:
+    - Use Given/When/Then style via WHEN/THEN scenarios; keep requirements observable and testable.
+  tasks:
+    - Each task states how to verify completion.
+    - Tests live with the group that introduces the behavior, not in a final dump group.
+
+operations:
+  apply:
+    guidance:
+      - Do not implement until the user has reviewed this change and asked to apply.
+      - Tests use fixtures only; no live Elering or Telegram calls.

@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-09-30
+goal: Find three cheapest non-overlapping 3-hour Nord Pool EE windows for remaining
+  today and send them to Telegram once at 08:00 Europe/Tallinn.
