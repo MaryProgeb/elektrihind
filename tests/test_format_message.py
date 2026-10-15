@@ -1,11 +1,15 @@
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 import pytest
 
 from elektrihind.fetch import Interval
-from elektrihind.format import format_daily_message, format_window_range
+from elektrihind.format import (
+    format_afternoon_message,
+    format_daily_message,
+    format_window_range,
+)
 from elektrihind.slots import Window
 
 TZ = ZoneInfo("Europe/Tallinn")
@@ -94,3 +98,60 @@ def test_never_mentions_tomorrow_or_advises_waiting(windows):
 def test_empty_remaining_series_is_rejected():
     with pytest.raises(ValueError):
         format_daily_message([], [], VAT)
+
+
+def afternoon_window(start: datetime, mean_eur_mwh: str = "33.95") -> Window:
+    end = datetime.fromtimestamp(start.timestamp() + 3 * 3600, TZ)
+    return Window(start=start, end=end, mean_eur_mwh=Decimal(mean_eur_mwh))
+
+
+def afternoon_series(prices: list[float] | None = None) -> list[Interval]:
+    prices = prices or [50.0, 50.0]
+    start = datetime(2026, 10, 11, 15, 15, tzinfo=TZ).timestamp()
+    return [
+        Interval(start=datetime.fromtimestamp(start + 900 * i, TZ), price_eur_mwh=price)
+        for i, price in enumerate(prices)
+    ]
+
+
+def test_afternoon_window_crossing_midnight_qualifies_both_dates():
+    w = afternoon_window(datetime(2026, 10, 11, 23, 0, tzinfo=TZ))
+    text = format_afternoon_message(afternoon_series(), [w], VAT, date(2026, 10, 11))
+
+    assert "täna 23:00–homme 02:00 · 4.2 s/kWh" in text
+
+
+def test_afternoon_window_entirely_tomorrow_is_date_qualified():
+    w = afternoon_window(datetime(2026, 10, 12, 1, 0, tzinfo=TZ))
+    text = format_afternoon_message(afternoon_series(), [w], VAT, date(2026, 10, 11))
+
+    assert "homme 01:00–04:00" in text
+
+
+def test_afternoon_window_at_period_end_labels_overmorrow_midnight():
+    w = afternoon_window(datetime(2026, 10, 12, 21, 0, tzinfo=TZ))
+    text = format_afternoon_message(afternoon_series(), [w], VAT, date(2026, 10, 11))
+
+    assert "homme 21:00–ülehomme 00:00" in text
+
+
+def test_afternoon_period_average_uses_eligible_series():
+    text = format_afternoon_message(afternoon_series([10.0, 20.0]), [], VAT, date(2026, 10, 11))
+
+    # Mean 15 EUR/MWh * 1.24 / 10 = 1.86, displayed to one decimal place.
+    assert "Perioodi keskmine: 1.9 s/kWh" in text
+
+
+def test_afternoon_empty_slots_and_vat_footer_are_formatted():
+    text = format_afternoon_message(afternoon_series(), [], 0.20, date(2026, 10, 11))
+
+    assert "ei mahu ühtegi 3-tunnist ajavahemikku" in text
+    assert "1. " not in text
+    assert "käibemaksu 20%" in text
+    assert "võrgutasu ja aktsiisi ei ole arvestatud" in text
+    assert "Perioodi keskmine" in text
+
+
+def test_afternoon_empty_price_series_is_rejected():
+    with pytest.raises(ValueError):
+        format_afternoon_message([], [], VAT, date(2026, 10, 11))

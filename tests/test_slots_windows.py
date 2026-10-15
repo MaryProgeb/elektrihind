@@ -3,7 +3,13 @@ from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 from elektrihind.fetch import Interval
-from elektrihind.slots import candidate_windows, ceil_to_interval, remaining_day_cutoff
+from elektrihind.slots import (
+    afternoon_candidate_windows,
+    afternoon_cutoff,
+    candidate_windows,
+    ceil_to_interval,
+    remaining_day_cutoff,
+)
 
 TZ = ZoneInfo("Europe/Tallinn")
 TODAY = date(2026, 10, 11)
@@ -140,3 +146,62 @@ def test_dst_23h_day_window_is_three_real_hours():
     # Wall-clock subtraction on a shared tzinfo would give 4h here; compare real instants.
     assert first.end.timestamp() - first.start.timestamp() == 3 * 3600
     assert first.end.strftime("%H:%M") == "04:00"  # 00:00 EET + 3h real = 04:00 EEST
+
+
+# --- afternoon span ---------------------------------------------------------
+
+
+def test_afternoon_cutoff_at_scheduled_1507_run_is_1515():
+    now = datetime(2026, 10, 11, 15, 7, tzinfo=TZ)
+    cutoff = afternoon_cutoff(now, TODAY)
+    intervals = full_day(TODAY) + full_day(date(2026, 10, 12))
+
+    assert cutoff == datetime(2026, 10, 11, 15, 15, tzinfo=TZ)
+    windows = afternoon_candidate_windows(
+        intervals, cutoff, datetime(2026, 10, 13, 0, 0, tzinfo=TZ)
+    )
+    assert windows[0].start == cutoff
+    assert all(w.start.timestamp() >= cutoff.timestamp() for w in windows)
+
+
+def test_delayed_publication_advances_afternoon_cutoff():
+    now = datetime(2026, 10, 11, 17, 7, tzinfo=TZ)
+    assert afternoon_cutoff(now, TODAY) == datetime(2026, 10, 11, 17, 15, tzinfo=TZ)
+
+
+def test_afternoon_window_can_cross_midnight():
+    intervals = full_day(TODAY) + full_day(date(2026, 10, 12))
+    cutoff = datetime(2026, 10, 11, 15, 0, tzinfo=TZ)
+    windows = afternoon_candidate_windows(
+        intervals, cutoff, datetime(2026, 10, 13, 0, 0, tzinfo=TZ)
+    )
+
+    assert any(
+        w.start == datetime(2026, 10, 11, 23, 0, tzinfo=TZ)
+        and w.end == datetime(2026, 10, 12, 2, 0, tzinfo=TZ)
+        for w in windows
+    )
+
+
+def test_afternoon_window_ending_exactly_at_midnight_is_included_only():
+    intervals = full_day(TODAY) + full_day(date(2026, 10, 12))
+    cutoff = datetime(2026, 10, 11, 15, 0, tzinfo=TZ)
+    bound = datetime(2026, 10, 13, 0, 0, tzinfo=TZ)
+    windows = afternoon_candidate_windows(intervals, cutoff, bound)
+    tomorrow_starts = [w.start for w in windows if w.start.date() == date(2026, 10, 12)]
+
+    assert max(tomorrow_starts).strftime("%H:%M") == "21:00"
+    assert all(w.end.timestamp() <= bound.timestamp() for w in windows)
+    assert not any(w.start.strftime("%H:%M") == "21:15" for w in windows if w.start.date() == date(2026, 10, 12))
+
+
+def test_afternoon_window_duration_is_three_elapsed_hours_across_dst():
+    start = datetime(2026, 3, 28, 15, 0, tzinfo=TZ)
+    intervals = series(start, [50.0] * 128)
+    cutoff = datetime(2026, 3, 29, 0, 0, tzinfo=TZ)
+    bound = datetime(2026, 3, 30, 0, 0, tzinfo=TZ)
+    windows = afternoon_candidate_windows(intervals, cutoff, bound)
+    crossing = next(w for w in windows if w.start == cutoff)
+
+    assert crossing.end.strftime("%Y-%m-%d %H:%M") == "2026-03-29 04:00"
+    assert crossing.end.timestamp() - crossing.start.timestamp() == 3 * 3600

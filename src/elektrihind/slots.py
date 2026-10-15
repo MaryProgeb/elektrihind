@@ -14,6 +14,7 @@ SLOT_INTERVALS = 12  # 12 x 15 min = 3 hours
 SELECT_COUNT = 3  # dishwasher windows per daily message
 SLOT_LENGTH = INTERVAL * SLOT_INTERVALS
 DAY_START = time(8, 0)  # remaining-day search starts at 08:00 local
+AFTERNOON_START = time(15, 0)
 INTERVAL_SECONDS = int(INTERVAL.total_seconds())
 
 
@@ -58,6 +59,12 @@ def remaining_day_cutoff(
     return cutoff
 
 
+def afternoon_cutoff(now: datetime, day: date) -> datetime:
+    """First 15-minute start at/after now, but never before 15:00 local."""
+    tz = now.tzinfo
+    return max(ceil_to_interval(now), datetime.combine(day, AFTERNOON_START, tzinfo=tz))
+
+
 def candidate_windows(
     intervals: Sequence[Interval],
     cutoff: datetime,
@@ -73,11 +80,53 @@ def candidate_windows(
       - if `latest_end` is set, it ends at or before that local time on the same day.
     Windows are not de-duplicated or de-overlapped here; see select_three.
     """
+    return _candidate_windows(
+        intervals,
+        cutoff,
+        latest_end=latest_end,
+        allow_midnight=False,
+        end_bound=None,
+    )
+
+
+def afternoon_candidate_windows(
+    intervals: Sequence[Interval],
+    cutoff: datetime,
+    end_bound: datetime,
+) -> list[Window]:
+    """Candidate windows within an afternoon span, allowing a midnight crossing.
+
+    `end_bound` is exclusive for interval starts and inclusive for window ends: a
+    three-hour window ending exactly at the bound is eligible.
+    """
+    return _candidate_windows(
+        intervals,
+        cutoff,
+        latest_end=None,
+        allow_midnight=True,
+        end_bound=end_bound,
+    )
+
+
+def _candidate_windows(
+    intervals: Sequence[Interval],
+    cutoff: datetime,
+    *,
+    latest_end: time | None,
+    allow_midnight: bool,
+    end_bound: datetime | None,
+) -> list[Window]:
     # Compare by epoch seconds: aware datetimes sharing a tzinfo compare wall-clock,
     # which is wrong during the repeated hour of a DST fall-back.
     cutoff_ts = cutoff.timestamp()
+    end_bound_ts = end_bound.timestamp() if end_bound is not None else None
     eligible = sorted(
-        (iv for iv in intervals if iv.start.timestamp() >= cutoff_ts),
+        (
+            iv
+            for iv in intervals
+            if iv.start.timestamp() >= cutoff_ts
+            and (end_bound_ts is None or iv.start.timestamp() < end_bound_ts)
+        ),
         key=lambda iv: iv.start.timestamp(),
     )
     windows: list[Window] = []
@@ -88,12 +137,14 @@ def candidate_windows(
 
         if not _is_contiguous(group):
             continue
-        if last.start.date() != first.start.date():
+        if not allow_midnight and last.start.date() != first.start.date():
             continue
 
         end = datetime.fromtimestamp(
             first.start.timestamp() + SLOT_LENGTH.total_seconds(), first.start.tzinfo
         )
+        if end_bound_ts is not None and end.timestamp() > end_bound_ts:
+            continue
         if latest_end is not None:
             if end.date() != first.start.date() or end.time() > latest_end:
                 continue
